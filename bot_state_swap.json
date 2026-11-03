@@ -5,8 +5,10 @@
     "avgEntryPrice": 2284.87,
     "breakevenPrice": 2287.157157157157,
     "liquidationPrice": 2067.80735,
-    "rsi_reset": false,
+    "rsi_reset": true,
     "active_order_ids": [
+        "4068389193047920640",
+        "4068389197678432256",
         "4068379241206042624"
     ]
 }
