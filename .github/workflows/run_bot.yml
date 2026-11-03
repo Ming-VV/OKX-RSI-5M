@@ -1,8 +1,11 @@
 name: Run Trading Bot
 
 on:
+  # 允許外部 cron-job.org 透過 API 觸發
   repository_dispatch:
     types: [run-bot-event]
+
+  # 保持允許手動觸發
   workflow_dispatch:
 
 jobs:
@@ -20,13 +23,12 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-          # 【關鍵設定 1】啟用 pip 快取，會根據 requirements.txt 自動辨識
+          # 啟用 pip 快取，加速後續執行
           cache: 'pip'
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          # 【關鍵設定 2】加上 --cache-dir，確保會使用快取資料夾
           pip install -r requirements.txt --cache-dir ~/.cache/pip
 
       - name: Run bot script
@@ -41,6 +43,7 @@ jobs:
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git add bot_state_swap.json market_log_swap.csv
+          # 使用容錯寫法：檔案若存在才加入 Git，避免找不到檔案導致工作流程崩潰
+          git add bot_state_swap.json market_log_swap.csv || true
           git commit -m "Auto-update bot state and logs [skip ci]" || echo "No changes to commit"
-          git push
+          git push || echo "No changes to push"
