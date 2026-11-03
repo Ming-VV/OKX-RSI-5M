@@ -122,13 +122,14 @@ def run_strategy():
     
     try:
         current_time = get_taiwan_time()
-        print(f"[{current_time}] 🔄 預先掛單機器人啟動 (總成本含買單A之2倍加碼) | 標的: {SYMBOL} | 槓桿: {LEVERAGE}x 逐倉")
+        print(f"[{current_time}] 🔄 預先掛單機器人啟動 (保證金: {BASE_MARGIN_USD}U) | 標的: {SYMBOL} | 強制設定: {LEVERAGE}x 逐倉")
         
-        try:
-            exchange.set_margin_mode(MARGIN_MODE, SYMBOL)
-            exchange.set_leverage(LEVERAGE, SYMBOL)
-        except Exception as e:
-            print(f"ℹ️ 槓桿與保證金模式設定提示: {e}")
+        # ==========================
+        # 強制設定保證金模式與槓桿 (拿掉 try 確保一定成功或報錯)
+        # ==========================
+        exchange.set_margin_mode(MARGIN_MODE, SYMBOL)
+        exchange.set_leverage(LEVERAGE, SYMBOL)
+        print(f"✅ 成功強制切換為: 逐倉 (Isolated) / {LEVERAGE}x 槓桿")
         
         ohlcv = exchange.fetch_ohlcv(SYMBOL, TIMEFRAME, limit=50)
         df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
@@ -254,13 +255,13 @@ def run_strategy():
                 print(f"🎯 【預先掛賣單】固定 0.3% 停利價: {formatted_sell_price} | 庫存: {formatted_contracts}")
                 action_taken = "SWAP_PRE_PLACE_TP_SELL"
 
-        # --- B. 預先掛買單 (隨時計算並提早掛出 2 張預判買單) ---
+        # --- B. 預先掛買單 (使用 5U 保證金計算) ---
         if should_buy:
             buy_orders_to_cancel = [o['id'] for o in open_orders if o['side'] == 'buy']
             if buy_orders_to_cancel:
                 cancel_orders_safely(buy_orders_to_cancel)
 
-            # 【預先買單 1】RSI=10 預判價格買單 (保證金 1U)
+            # 【預先買單 1】RSI=10 預判價格買單 (保證金 5U)
             rsi10_price = calculate_exact_price_for_rsi_with_current(df, current_price, RSI_LENGTH, RSI_BUY_TARGET)
             margin_1 = BASE_MARGIN_USD
             notional_1 = margin_1 * LEVERAGE
@@ -272,7 +273,7 @@ def run_strategy():
             params_buy1 = {'posSide': 'long'}
             order1 = exchange.create_limit_buy_order(SYMBOL, f_contracts_1, f_price_1, params_buy1)
             new_active_ids.append(order1['id'])
-            print(f"🎯 【預先掛買單A (RSI=10 預判)】掛單價: {f_price_1} | 保證金: {margin_1}U")
+            print(f"🎯 【預先掛買單A (RSI=10 預判)】掛單價: {f_price_1} | 保證金: {margin_1}U (委託價值: {notional_1}U)")
 
             # 【預先買單 2】0.97 折數巨幅加碼單
             estimated_total_margin_including_a = state['totalMarginUSD'] + margin_1
@@ -295,7 +296,7 @@ def run_strategy():
             params_buy2 = {'posSide': 'long'}
             order2 = exchange.create_limit_buy_order(SYMBOL, f_contracts_2, f_price_2, params_buy2)
             new_active_ids.append(order2['id'])
-            print(f"⚡ 【預先掛買單B (包含買單A總成本之 2 倍)】掛單價: {f_price_2:.2f} | 保證金: {margin_2:.2f}U")
+            print(f"⚡ 【預先掛買單B (0.97折數)】掛單價: {f_price_2:.2f} | 保證金: {margin_2:.2f}U (委託價值: {notional_2}U)")
             
             action_taken = "SWAP_PRE_PLACE_DOUBLE_BUYS"
 
