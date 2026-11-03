@@ -112,4 +112,219 @@ def cancel_orders_safely(order_ids):
     for oid in order_ids:
         try:
             if oid:
-                exchange.cancel_order(
+                exchange.cancel_order(oid, SYMBOL)
+                print(f"🗑️ 已成功撤銷舊掛單: {oid}")
+        except Exception as e:
+            print(f"⚠️ 撤銷訂單失敗 ({oid}) (可能已成交或不存在): {e}")
+
+def run_strategy():
+    global state
+    
+    try:
+        current_time = get_taiwan_time()
+        print(f"[{current_time}] 🔄 預先掛單機器人啟動 (總成本含買單A之2倍加碼) | 標的: {SYMBOL} | 槓桿: {LEVERAGE}x 逐倉")
+        
+        try:
+            exchange.set_margin_mode(MARGIN_MODE, SYMBOL)
+            exchange.set_leverage(LEVERAGE, SYMBOL)
+        except Exception as e:
+            print(f"ℹ️ 槓桿與保證金模式設定提示: {e}")
+        
+        ohlcv = exchange.fetch_ohlcv(SYMBOL, TIMEFRAME, limit=50)
+        df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+        
+        ticker = exchange.fetch_ticker(SYMBOL)
+        current_price = ticker['last']
+        
+        df['rsi'] = calculate_rsi(df, RSI_LENGTH)
+        current_rsi = df['rsi'].iloc[-1]
+        
+        print(f"現價: {current_price} | 當前動態 RSI(3): {current_rsi:.2f} | 持倉合約: {state['totalContracts']} | 解禁狀態: {state['rsi_reset']}")
+
+        action_taken = "HOLD"
+
+        # ==========================
+        # 3. 交易所真實狀態與訂單成交檢查
+        # ==========================
+        open_orders = exchange.fetch_open_orders(SYMBOL)
+        open_order_ids = [order['id'] for order in open_orders]
+        
+        tracked_active_ids = state.get('active_order_ids', [])
+        missing_orders = [oid for oid in tracked_active_ids if oid not in open_order_ids]
+        
+        if missing_orders:
+            print(f"🔍 偵測到有掛單已成交或取消，正在向交易所查詢真實狀態...")
+            
+            for oid in missing_orders:
+                try:
+                    order_info = exchange.fetch_order(oid, SYMBOL)
+                    order_status = order_info.get('status')
+                    
+                    if order_status == 'closed':
+                        print(f"🎉 確認掛單 {oid} 已真實成交！")
+                        side = order_info.get('side')
+                        
+                        if side == 'sell':  # 平倉賣單成交 -> 清倉重置
+                            state['buyCount'] = 0
+                            state['totalContracts'] = 0.0
+                            state['totalMarginUSD'] = 0.0
+                            state['avgEntryPrice'] = 0.0
+                            state['breakevenPrice'] = 0.0
+                            state['liquidationPrice'] = 0.0
+                            state['rsi_reset'] = True
+                            print(f"✨ 固定 0.3% 止盈平倉單完全成交！已清倉並重置狀態。")
+                            
+                        elif side == 'buy':  # 買單成交 -> 更新持倉
+                            positions = exchange.fetch_positions([SYMBOL])
+                            actual_contracts = 0.0
+                            actual_entry_price = 0.0
+                            for pos in positions:
+                                if pos['symbol'] == SYMBOL and float(pos['contracts']) > 0:
+                                    actual_contracts = float(pos['contracts'])
+                                    actual_entry_price = float(pos['entryPrice'])
+                                    break
+                            
+                            filled_notional = float(order_info.get('cost', 0.0))
+                            added_margin = filled_notional / LEVERAGE if filled_notional > 0 else BASE_MARGIN_USD
+                            
+                            state['buyCount'] += 1
+                            state['totalContracts'] = actual_contracts if actual_contracts > 0 else state['totalContracts']
+                            state['totalMarginUSD'] += added_margin
+                            state['avgEntryPrice'] = actual_entry_price if actual_entry_price > 0 else current_price
+                            
+                            state['breakevenPrice'] = state['avgEntryPrice'] / (1.0 - (FEE_RATE * 2))
+                            state['liquidationPrice'] = state['avgEntryPrice'] * (1.0 - (1.0 / LEVERAGE) + MAINTENANCE_MARGIN_RATE)
+                            
+                            state['rsi_reset'] = False
+                            print(f"🛒 買單成交！總次數: {state['buyCount']} | 總合約: {state['totalContracts']} | 均價: {state['avgEntryPrice']:.2f}")
+                            
+                            state['active_order_ids'] = []
+                        
+                    elif order_status == 'canceled':
+                        print(f"⚠️ 掛單 {oid} 被取消。")
+                        
+                except Exception as e:
+                    print(f"⚠️ 查詢訂單 {oid} 失敗: {e}")
+            
+            save_state(state)
+
+        elif not tracked_active_ids and len(open_orders) > 0:
+            state['active_order_ids'] = [o['id'] for o in open_orders]
+            print(f"⚠️ 【狀態同步】自動同步現有掛單群組")
+            save_state(state)
+
+        # ==========================
+        # 4. RSI 冷卻解禁判定 (>= 30 解禁)
+        # ==========================
+        if not state['rsi_reset'] and current_rsi >= RSI_CANBUY:
+            state['rsi_reset'] = True
+            print(f"📈 【RSI 冷卻解禁】當前 RSI 已回升至 {current_rsi:.2f} (>= 30)，解禁下次加碼開關！")
+            save_state(state)
+
+        # ==========================
+        # 5. 核心判定與預先掛單佈署 (無次數上限)
+        # ==========================
+        is_safe_from_liq = (state['buyCount'] == 0) or (current_price > state['liquidationPrice'] * 1.02)
+        is_allowed_by_cost = (state['buyCount'] == 0) or (state['breakevenPrice'] > current_price)
+
+        # 移除 buyCount < MAX_BUY_STEPS 限制，改為僅受安全防線與 RSI 解禁控制
+        should_buy = is_allowed_by_cost and is_safe_from_liq and state['rsi_reset']
+        has_inventory = state['totalContracts'] > 0
+
+        new_active_ids = []
+
+        # --- A. 預先掛賣單 (有庫存就必須隨時掛好固定 0.3% 獲利平倉單) ---
+        if has_inventory:
+            target_sell_price = state['breakevenPrice'] * PROFIT_TARGET_RATIO
+            formatted_sell_price = float(exchange.price_to_precision(SYMBOL, target_sell_price))
+            formatted_contracts = float(exchange.amount_to_precision(SYMBOL, state['totalContracts']))
+            
+            sell_order_exists = False
+            for o in open_orders:
+                if o['side'] == 'sell' and abs(float(o['price']) - formatted_sell_price) < 0.1:
+                    new_active_ids.append(o['id'])
+                    sell_order_exists = True
+                else:
+                    if o['side'] == 'sell':
+                        cancel_orders_safely([o['id']])
+            
+            if not sell_order_exists:
+                params = {'reduceOnly': True}
+                order_sell = exchange.create_limit_sell_order(SYMBOL, formatted_contracts, formatted_sell_price, params)
+                new_active_ids.append(order_sell['id'])
+                print(f"🎯 【預先掛賣單】固定 0.3% 停利價: {formatted_sell_price} | 庫存: {formatted_contracts}")
+                action_taken = "SWAP_PRE_PLACE_TP_SELL"
+
+        # --- B. 預先掛買單 (隨時計算並提早掛出 2 張預判買單) ---
+        if should_buy:
+            buy_orders_to_cancel = [o['id'] for o in open_orders if o['side'] == 'buy']
+            if buy_orders_to_cancel:
+                cancel_orders_safely(buy_orders_to_cancel)
+
+            # 【預先買單 1】RSI=10 預判價格買單 (保證金 1U)
+            rsi10_price = calculate_exact_price_for_rsi_with_current(df, current_price, RSI_LENGTH, RSI_BUY_TARGET)
+            margin_1 = BASE_MARGIN_USD
+            notional_1 = margin_1 * LEVERAGE
+            contracts_1 = notional_1 / rsi10_price
+            
+            f_contracts_1 = float(exchange.amount_to_precision(SYMBOL, contracts_1))
+            f_price_1 = float(exchange.price_to_precision(SYMBOL, rsi10_price))
+            
+            order1 = exchange.create_limit_buy_order(SYMBOL, f_contracts_1, f_price_1)
+            new_active_ids.append(order1['id'])
+            print(f"🎯 【預先掛買單A (RSI=10 預判)】掛單價: {f_price_1} | 保證金: {margin_1}U")
+
+            # 【預先買單 2】0.97 折數巨幅加碼單
+            estimated_total_margin_including_a = state['totalMarginUSD'] + margin_1
+            margin_2 = estimated_total_margin_including_a * 2.0
+            
+            if state['buyCount'] == 0:
+                estimated_avg_price = f_price_1
+            else:
+                curr_contracts = state['totalContracts']
+                estimated_total_contracts = curr_contracts + f_contracts_1
+                estimated_avg_price = (state['avgEntryPrice'] * curr_contracts + f_price_1 * f_contracts_1) / estimated_total_contracts if estimated_total_contracts > 0 else f_price_1
+
+            target_price_2 = estimated_avg_price * 0.97
+            notional_2 = margin_2 * LEVERAGE
+            contracts_2 = notional_2 / target_price_2
+            
+            f_contracts_2 = float(exchange.amount_to_precision(SYMBOL, contracts_2))
+            f_price_2 = float(exchange.price_to_precision(SYMBOL, target_price_2))
+            
+            order2 = exchange.create_limit_buy_order(SYMBOL, f_contracts_2, f_price_2)
+            new_active_ids.append(order2['id'])
+            print(f"⚡ 【預先掛買單B (包含買單A總成本之 2 倍)】掛單價: {f_price_2:.2f} | 保證金: {margin_2:.2f}U")
+            
+            action_taken = "SWAP_PRE_PLACE_DOUBLE_BUYS"
+
+        state['active_order_ids'] = list(set(new_active_ids))
+        save_state(state)
+
+        # ==========================
+        # 6. 寫入記錄至 CSV
+        # ==========================
+        last_candle = df.iloc[-1]
+        log_data = {
+            "timestamp": current_time,
+            "symbol": SYMBOL,
+            "open": round(last_candle['open'], 2),
+            "high": round(last_candle['high'], 2),
+            "low": round(last_candle['low'], 2),
+            "close": round(last_candle['close'], 2),
+            "rsi": round(current_rsi, 2),
+            "buy_count": state['buyCount'],
+            "total_margin_usd": round(state['totalMarginUSD'], 2),
+            "avg_entry_price": round(state['avgEntryPrice'], 2),
+            "breakeven_price": round(state['breakevenPrice'], 2),
+            "liquidation_price": round(state['liquidationPrice'], 2),
+            "rsi_reset": state['rsi_reset'],
+            "action": action_taken
+        }
+        log_market_data(log_data)
+
+    except Exception as e:
+        print(f"❌ 發生錯誤: {e}")
+
+if __name__ == "__main__":
+    run_strategy()
