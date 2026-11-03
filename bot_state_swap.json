@@ -1,0 +1,13 @@
+{
+    "buyCount": 0,
+    "totalContracts": 0.0,
+    "totalMarginUSD": 0.0,
+    "avgEntryPrice": 0.0,
+    "breakevenPrice": 0.0,
+    "liquidationPrice": 0.0,
+    "rsi_reset": true,
+    "active_order_ids": [
+        "4067288428732534784",
+        "4067288421652549632"
+    ]
+}
