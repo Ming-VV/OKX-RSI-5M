@@ -19,7 +19,7 @@ exchange = ccxt.okx({
 exchange.load_markets()
 
 # ==========================
-# 2. 策略與合約參數設定 (已移除最大加碼次數限制)
+# 2. 策略與合約參數設定
 # ==========================
 SYMBOL = 'ETH/USDT:USDT'        # OKX 永續合約標準標的
 TIMEFRAME = '5m'                # 5分鐘極短線
@@ -222,12 +222,11 @@ def run_strategy():
             save_state(state)
 
         # ==========================
-        # 5. 核心判定與預先掛單佈署 (無次數上限)
+        # 5. 核心判定與預先掛單佈署 (指定 posSide='long')
         # ==========================
         is_safe_from_liq = (state['buyCount'] == 0) or (current_price > state['liquidationPrice'] * 1.02)
         is_allowed_by_cost = (state['buyCount'] == 0) or (state['breakevenPrice'] > current_price)
 
-        # 移除 buyCount < MAX_BUY_STEPS 限制，改為僅受安全防線與 RSI 解禁控制
         should_buy = is_allowed_by_cost and is_safe_from_liq and state['rsi_reset']
         has_inventory = state['totalContracts'] > 0
 
@@ -249,7 +248,7 @@ def run_strategy():
                         cancel_orders_safely([o['id']])
             
             if not sell_order_exists:
-                params = {'reduceOnly': True}
+                params = {'reduceOnly': True, 'posSide': 'long'}
                 order_sell = exchange.create_limit_sell_order(SYMBOL, formatted_contracts, formatted_sell_price, params)
                 new_active_ids.append(order_sell['id'])
                 print(f"🎯 【預先掛賣單】固定 0.3% 停利價: {formatted_sell_price} | 庫存: {formatted_contracts}")
@@ -270,7 +269,8 @@ def run_strategy():
             f_contracts_1 = float(exchange.amount_to_precision(SYMBOL, contracts_1))
             f_price_1 = float(exchange.price_to_precision(SYMBOL, rsi10_price))
             
-            order1 = exchange.create_limit_buy_order(SYMBOL, f_contracts_1, f_price_1)
+            params_buy1 = {'posSide': 'long'}
+            order1 = exchange.create_limit_buy_order(SYMBOL, f_contracts_1, f_price_1, params_buy1)
             new_active_ids.append(order1['id'])
             print(f"🎯 【預先掛買單A (RSI=10 預判)】掛單價: {f_price_1} | 保證金: {margin_1}U")
 
@@ -292,7 +292,8 @@ def run_strategy():
             f_contracts_2 = float(exchange.amount_to_precision(SYMBOL, contracts_2))
             f_price_2 = float(exchange.price_to_precision(SYMBOL, target_price_2))
             
-            order2 = exchange.create_limit_buy_order(SYMBOL, f_contracts_2, f_price_2)
+            params_buy2 = {'posSide': 'long'}
+            order2 = exchange.create_limit_buy_order(SYMBOL, f_contracts_2, f_price_2, params_buy2)
             new_active_ids.append(order2['id'])
             print(f"⚡ 【預先掛買單B (包含買單A總成本之 2 倍)】掛單價: {f_price_2:.2f} | 保證金: {margin_2:.2f}U")
             
