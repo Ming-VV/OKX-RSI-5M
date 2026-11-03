@@ -6,7 +6,7 @@ import pandas as pd
 import numpy as np
 
 # ==========================
-# 1. 從 GitHub Secrets 讀取金鑰 (合約模式)
+# 1. 從環境變數讀取 OKX API 金鑰 (合約模式)
 # ==========================
 exchange = ccxt.okx({
     'apiKey': os.environ.get('OKX_API_KEY'),
@@ -197,19 +197,25 @@ def run_strategy():
                                     actual_entry_price = float(pos['entryPrice'])
                                     break
                             
-                            filled_notional = float(order_info.get('cost', 0.0))
-                            added_margin = filled_notional / LEVERAGE if filled_notional > 0 else BASE_MARGIN_USD
-                            
-                            state['buyCount'] += 1
-                            state['totalContracts'] = actual_contracts if actual_contracts > 0 else state['totalContracts']
-                            state['totalMarginUSD'] += added_margin
-                            state['avgEntryPrice'] = actual_entry_price if actual_entry_price > 0 else current_price
+                            # 【已修正】直接透過真實成交合約數與均價計算保證金，避免 cost 欄位換算錯誤
+                            if actual_contracts > 0 and actual_entry_price > 0:
+                                actual_notional = actual_contracts * actual_entry_price
+                                exact_total_margin = actual_notional / LEVERAGE
+                                
+                                state['buyCount'] += 1
+                                state['totalContracts'] = actual_contracts
+                                state['totalMarginUSD'] = exact_total_margin
+                                state['avgEntryPrice'] = actual_entry_price
+                            else:
+                                state['buyCount'] += 1
+                                state['totalMarginUSD'] += BASE_MARGIN_USD
+                                state['avgEntryPrice'] = current_price
                             
                             state['breakevenPrice'] = state['avgEntryPrice'] / (1.0 - (FEE_RATE * 2))
                             state['liquidationPrice'] = state['avgEntryPrice'] * (1.0 - (1.0 / LEVERAGE) + MAINTENANCE_MARGIN_RATE)
                             
                             state['rsi_reset'] = False
-                            print(f"🛒 買單成交！總次數: {state['buyCount']} | 總合約: {state['totalContracts']} | 均價: {state['avgEntryPrice']:.2f}")
+                            print(f"🛒 買單成交！總次數: {state['buyCount']} | 總合約: {state['totalContracts']} | 均價: {state['avgEntryPrice']:.2f} | 總保證金: {state['totalMarginUSD']:.2f}U")
                             
                             state['active_order_ids'] = []
                         
@@ -251,7 +257,6 @@ def run_strategy():
             formatted_sell_price = float(exchange.price_to_precision(SYMBOL, target_sell_price))
             formatted_contracts = float(exchange.amount_to_precision(SYMBOL, state['totalContracts']))
             
-            # 【防呆機制】若預測賣價低於或等於平均成本價，則拒絕掛單以防止虧損
             if formatted_sell_price <= state['avgEntryPrice']:
                 print(f"⚠️ 【安全機制攔截】預測賣單價 ({formatted_sell_price}) 低於或等於成本均價 ({state['avgEntryPrice']:.2f})，為避免虧損，暫不掛賣單！")
             else:
@@ -290,7 +295,7 @@ def run_strategy():
             new_active_ids.append(order1['id'])
             print(f"🎯 【預先掛買單A (RSI=10 預判)】掛單價: {f_price_1} | 保證金: {margin_1}U (委託價值: {notional_1}U)")
 
-            # 【預先買單 2】0.97 折數巨幅加碼單
+            # 【預先買單 2】0.97 折數巨幅加碼單 (庫存保證金 + 買單A保證金) * 2
             estimated_total_margin_including_a = state['totalMarginUSD'] + margin_1
             margin_2 = estimated_total_margin_including_a * 2.0
             
@@ -310,7 +315,7 @@ def run_strategy():
             
             order2 = exchange.create_limit_buy_order(SYMBOL, f_contracts_2, f_price_2)
             new_active_ids.append(order2['id'])
-            print(f"⚡ 【預先掛買單B (0.97折數)】掛單價: {f_price_2:.2f} | 保證金: {margin_2:.2f}U (委託價值: {notional_2}U)")
+            print(f"⚡ 【預先買單B (0.97折數)】掛單價: {f_price_2:.2f} | 保證金: {margin_2:.2f}U (委託價值: {notional_2}U)")
             
             action_taken = "SWAP_PRE_PLACE_DOUBLE_BUYS"
 
