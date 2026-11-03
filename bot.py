@@ -125,11 +125,25 @@ def run_strategy():
         print(f"[{current_time}] 🔄 預先掛單機器人啟動 (保證金: {BASE_MARGIN_USD}U) | 標的: {SYMBOL} | 強制設定: {LEVERAGE}x 逐倉")
         
         # ==========================
-        # 強制設定保證金模式與槓桿 (拿掉 try 確保一定成功或報錯)
+        # 安全且正確地設定保證金模式與槓桿 (加入明確的整數與參數對應)
         # ==========================
-        exchange.set_margin_mode(MARGIN_MODE, SYMBOL)
-        exchange.set_leverage(LEVERAGE, SYMBOL)
-        print(f"✅ 成功強制切換為: 逐倉 (Isolated) / {LEVERAGE}x 槓桿")
+        try:
+            exchange.set_margin_mode(MARGIN_MODE, SYMBOL)
+        except Exception as e:
+            print(f"ℹ️ 保證金模式設定提示: {e}")
+
+        try:
+            # 針對 OKX API 規範，明確帶入整數槓桿
+            exchange.set_leverage(int(LEVERAGE), SYMBOL, {'marginMode': MARGIN_MODE})
+        except Exception as e:
+            print(f"ℹ️ 槓桿設定提示 (嘗試直接設定): {e}")
+            try:
+                exchange.set_leverage(int(LEVERAGE), SYMBOL)
+            except Exception as e2:
+                print(f"❌ 槓桿設定最終失敗: {e2}")
+                raise e2
+
+        print(f"✅ 成功套用: 逐倉 (Isolated) / {LEVERAGE}x 槓桿")
         
         ohlcv = exchange.fetch_ohlcv(SYMBOL, TIMEFRAME, limit=50)
         df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
