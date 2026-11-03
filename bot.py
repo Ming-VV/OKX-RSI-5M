@@ -235,7 +235,7 @@ def run_strategy():
             save_state(state)
 
         # ==========================
-        # 5. 核心判定與預先掛單佈署 (移除 posSide)
+        # 5. 核心判定與預先掛單佈署
         # ==========================
         is_safe_from_liq = (state['buyCount'] == 0) or (current_price > state['liquidationPrice'] * 1.02)
         is_allowed_by_cost = (state['buyCount'] == 0) or (state['breakevenPrice'] > current_price)
@@ -245,27 +245,31 @@ def run_strategy():
 
         new_active_ids = []
 
-        # --- A. 預先掛賣單 (有庫存就必須隨時掛好固定 0.3% 獲利平倉單) ---
+        # --- A. 預先掛賣單 (加入防呆機制：若賣價不高於成本均價則不掛單) ---
         if has_inventory:
             target_sell_price = state['breakevenPrice'] * PROFIT_TARGET_RATIO
             formatted_sell_price = float(exchange.price_to_precision(SYMBOL, target_sell_price))
             formatted_contracts = float(exchange.amount_to_precision(SYMBOL, state['totalContracts']))
             
-            sell_order_exists = False
-            for o in open_orders:
-                if o['side'] == 'sell' and abs(float(o['price']) - formatted_sell_price) < 0.1:
-                    new_active_ids.append(o['id'])
-                    sell_order_exists = True
-                else:
-                    if o['side'] == 'sell':
-                        cancel_orders_safely([o['id']])
-            
-            if not sell_order_exists:
-                params = {'reduceOnly': True}  # 移除 posSide
-                order_sell = exchange.create_limit_sell_order(SYMBOL, formatted_contracts, formatted_sell_price, params)
-                new_active_ids.append(order_sell['id'])
-                print(f"🎯 【預先掛賣單】固定 0.3% 停利價: {formatted_sell_price} | 庫存: {formatted_contracts}")
-                action_taken = "SWAP_PRE_PLACE_TP_SELL"
+            # 【新增防呆檢查】若預測賣價低於或等於平均成本價，則放棄掛單以避免虧損
+            if formatted_sell_price <= state['avgEntryPrice']:
+                print(f"⚠️ 【安全機制攔截】預測賣單價 ({formatted_sell_price}) 低於或等於成本均價 ({state['avgEntryPrice']:.2f})，為避免虧損，暫不掛賣單！")
+            else:
+                sell_order_exists = False
+                for o in open_orders:
+                    if o['side'] == 'sell' and abs(float(o['price']) - formatted_sell_price) < 0.1:
+                        new_active_ids.append(o['id'])
+                        sell_order_exists = True
+                    else:
+                        if o['side'] == 'sell':
+                            cancel_orders_safely([o['id']])
+                
+                if not sell_order_exists:
+                    params = {'reduceOnly': True}
+                    order_sell = exchange.create_limit_sell_order(SYMBOL, formatted_contracts, formatted_sell_price, params)
+                    new_active_ids.append(order_sell['id'])
+                    print(f"🎯 【預先掛賣單】獲利停利價: {formatted_sell_price} | 庫存: {formatted_contracts}")
+                    action_taken = "SWAP_PRE_PLACE_TP_SELL"
 
         # --- B. 預先掛買單 (使用 5U 保證金計算) ---
         if should_buy:
@@ -282,7 +286,7 @@ def run_strategy():
             f_contracts_1 = float(exchange.amount_to_precision(SYMBOL, contracts_1))
             f_price_1 = float(exchange.price_to_precision(SYMBOL, rsi10_price))
             
-            order1 = exchange.create_limit_buy_order(SYMBOL, f_contracts_1, f_price_1)  # 移除 params
+            order1 = exchange.create_limit_buy_order(SYMBOL, f_contracts_1, f_price_1)
             new_active_ids.append(order1['id'])
             print(f"🎯 【預先掛買單A (RSI=10 預判)】掛單價: {f_price_1} | 保證金: {margin_1}U (委託價值: {notional_1}U)")
 
@@ -304,7 +308,7 @@ def run_strategy():
             f_contracts_2 = float(exchange.amount_to_precision(SYMBOL, contracts_2))
             f_price_2 = float(exchange.price_to_precision(SYMBOL, target_price_2))
             
-            order2 = exchange.create_limit_buy_order(SYMBOL, f_contracts_2, f_price_2)  # 移除 params
+            order2 = exchange.create_limit_buy_order(SYMBOL, f_contracts_2, f_price_2)
             new_active_ids.append(order2['id'])
             print(f"⚡ 【預先掛買單B (0.97折數)】掛單價: {f_price_2:.2f} | 保證金: {margin_2:.2f}U (委託價值: {notional_2}U)")
             
