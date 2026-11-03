@@ -1,3 +1,4 @@
 ﻿timestamp,symbol,open,high,low,close,rsi,buy_count,total_margin_usd,avg_entry_price,breakeven_price,liquidation_price,rsi_reset,action
 2026-11-03 22:43:59,ETH/USDT:USDT,2287.76,2290.77,2286.73,2288.48,59.8,0,0.0,0.0,0.0,0.0,True,SWAP_PRE_PLACE_DOUBLE_BUYS
 2026-11-03 22:45:50,ETH/USDT:USDT,2289.41,2291.6,2289.4,2290.76,69.91,0,0.0,0.0,0.0,0.0,True,SWAP_PRE_PLACE_DOUBLE_BUYS
+2026-11-03 22:50:03,ETH/USDT:USDT,2290.3,2290.3,2289.32,2289.32,56.74,0,0.0,0.0,0.0,0.0,True,SWAP_PRE_PLACE_DOUBLE_BUYS
