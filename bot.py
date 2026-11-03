@@ -32,7 +32,7 @@ LEVERAGE = 10                   # 10 倍槓桿
 MARGIN_MODE = 'isolated'        # 逐倉模式 (Isolated)
 MAINTENANCE_MARGIN_RATE = 0.005 # 維持保證金率 (約 0.5%)
 
-BASE_MARGIN_USD = 1.0           # 基礎買入保證金 1U (買單A)
+BASE_MARGIN_USD = 5.0           # 基礎買入保證金 5U (買單A)
 FEE_RATE = 0.0005               # 合約手續費率
 
 STATE_FILE = "bot_state_swap.json"
