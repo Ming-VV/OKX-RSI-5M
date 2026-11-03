@@ -130,7 +130,7 @@ def run_strategy():
         try:
             exchange.set_margin_mode(MARGIN_MODE, SYMBOL)
         except Exception as e:
-            print(f"ℹ️ 保證金模式設定提示: {e}")
+            print(f"ℹ️ 保證金模式設定提示 (若已有掛單或持倉可能需先清空): {e}")
 
         try:
             exchange.set_leverage(int(LEVERAGE), SYMBOL, {'marginMode': MARGIN_MODE})
@@ -245,13 +245,13 @@ def run_strategy():
 
         new_active_ids = []
 
-        # --- A. 預先掛賣單 (加入防呆機制：若賣價不高於成本均價則不掛單) ---
+        # --- A. 預先掛賣單 (內建防呆安全閥：若賣價不高於成本均價則不掛單) ---
         if has_inventory:
             target_sell_price = state['breakevenPrice'] * PROFIT_TARGET_RATIO
             formatted_sell_price = float(exchange.price_to_precision(SYMBOL, target_sell_price))
             formatted_contracts = float(exchange.amount_to_precision(SYMBOL, state['totalContracts']))
             
-            # 【新增防呆檢查】若預測賣價低於或等於平均成本價，則放棄掛單以避免虧損
+            # 【防呆機制】若預測賣價低於或等於平均成本價，則拒絕掛單以防止虧損
             if formatted_sell_price <= state['avgEntryPrice']:
                 print(f"⚠️ 【安全機制攔截】預測賣單價 ({formatted_sell_price}) 低於或等於成本均價 ({state['avgEntryPrice']:.2f})，為避免虧損，暫不掛賣單！")
             else:
