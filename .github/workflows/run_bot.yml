@@ -1,41 +1,35 @@
 name: Run Trading Bot
 
 on:
-  # 定時排程觸發 (Cron Job) - 採用 UTC 時間
-  # 例如：每 5 分鐘執行一次 -> "*/5 * * * *"
-  schedule:
-    - cron: '*/5 * * * *'
+  # 允許外部 webhook（例如 cron-job.org）透過 API 觸發
+  repository_dispatch:
+    types: [run-bot-event]
 
-  # 允許在 GitHub 網頁手動觸發 (方便隨時測試)
+  # 保持允許手動觸發
   workflow_dispatch:
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
 
-    # 【重要】授予此 Job 對專案儲存庫的讀取與寫入權限 (允許自動 Commit/Push 狀態與記錄)
     permissions:
       contents: write
 
     steps:
-      # 步驟一：把專案程式碼拉到虛擬機中
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 步驟二：設定 Python 環境
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
           cache: 'pip'
 
-      # 步驟三：安裝所需依賴套件
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # 步驟四：執行交易機器人主程式 (從 GitHub Secrets 帶入 API 金鑰)
       - name: Run bot script
         env:
           OKX_API_KEY: ${{ secrets.OKX_API_KEY }}
@@ -44,15 +38,10 @@ jobs:
         run: |
           python bot.py
 
-      # 步驟五：自動將機器人產生的狀態檔與 CSV 紀錄 Commit 並 Push 回專案
       - name: Commit and push changes
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          
-          # 將會變動的狀態檔與記錄檔加入 git
           git add bot_state_swap.json market_log_swap.csv
-          
-          # 檢查是否有檔案變動，若有則提交並推送；若無則安全跳過
           git commit -m "Auto-update bot state and logs [skip ci]" || echo "No changes to commit"
           git push
