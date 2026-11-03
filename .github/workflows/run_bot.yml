@@ -1,11 +1,8 @@
 name: Run Trading Bot
 
 on:
-  # 允許外部 webhook（例如 cron-job.org）透過 API 觸發
   repository_dispatch:
     types: [run-bot-event]
-
-  # 保持允許手動觸發
   workflow_dispatch:
 
 jobs:
@@ -23,12 +20,14 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
+          # 【關鍵設定 1】啟用 pip 快取，會根據 requirements.txt 自動辨識
           cache: 'pip'
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          # 【關鍵設定 2】加上 --cache-dir，確保會使用快取資料夾
+          pip install -r requirements.txt --cache-dir ~/.cache/pip
 
       - name: Run bot script
         env:
