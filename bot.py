@@ -26,7 +26,7 @@ TIMEFRAME = '5m'                # 5分鐘極短線
 RSI_LENGTH = 3                  # RSI 週期 3
 RSI_BUY_TARGET = 10.0           # RSI=10 預判開倉目標
 RSI_CANBUY = 30.0               # RSI >= 30 冷卻解禁門檻
-PROFIT_TARGET_RATIO = 1.002     # 固定 0.2% 停利賣出目標 (保本價 * 1.002)
+PROFIT_TARGET_RATIO = 1.01     # 固定 1% 停利賣出目標 (保本價 * 1.01)
 
 LEVERAGE = 10                   # 10 倍槓桿
 MARGIN_MODE = 'isolated'        # 逐倉模式 (Isolated)
