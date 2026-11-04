@@ -26,13 +26,13 @@ TIMEFRAME = '5m'                # 5分鐘極短線
 RSI_LENGTH = 3                  # RSI 週期 3
 RSI_BUY_TARGET = 10.0           # RSI=10 預判開倉目標
 RSI_CANBUY = 30.0               # RSI >= 30 冷卻解禁門檻
-PROFIT_TARGET_RATIO = 1.003     # 固定 0.3% 停利賣出目標 (保本價 * 1.003)
+PROFIT_TARGET_RATIO = 1.001     # 固定 0.3% 停利賣出目標 (保本價 * 1.003)
 
 LEVERAGE = 10                   # 10 倍槓桿
 MARGIN_MODE = 'isolated'        # 逐倉模式 (Isolated)
 MAINTENANCE_MARGIN_RATE = 0.005 # 維持保證金率 (約 0.5%)
 
-BASE_MARGIN_USD = 5.0           # 基礎買入保證金 5U (買單A)
+BASE_MARGIN_USD = 3.0           # 基礎買入保證金 3U (買單A)
 FEE_RATE = 0.0005               # 合約手續費率
 
 STATE_FILE = "bot_state_swap.json"
