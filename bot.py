@@ -28,8 +28,8 @@ RSI_BUY_TARGET = 10.0           # RSI=10 預判開倉目標
 RSI_CANBUY = 30.0               # RSI >= 30 冷卻解禁門檻
 
 # 雙軌分批止盈目標設定
-PROFIT_TARGET_RATIO_1 = 1.005   # 第一段止盈：成本均價 + 0.5% (賣出 50% 倉位)
-PROFIT_TARGET_RATIO_2 = 1.01    # 第二段止盈：成本均價 + 1.0% (賣出剩餘 50% 倉位)
+PROFIT_TARGET_RATIO_1 = 1.003   # 第一段止盈：成本均價 + 0.3% (賣出 50% 倉位)
+PROFIT_TARGET_RATIO_2 = 1.006   # 第二段止盈：成本均價 + 0.6% (賣出剩餘 50% 倉位)
 
 LEVERAGE = 10                   # 10 倍槓桿
 MARGIN_MODE = 'isolated'        # 逐倉模式 (Isolated)
