@@ -19,7 +19,7 @@ exchange = ccxt.okx({
 exchange.load_markets()
 
 # ==========================
-# 2. 策略與合約參數設定
+# 2. 策略與合約參數設定 (保守防禦 4 檔金字塔配置)
 # ==========================
 SYMBOL = 'ETH/USDT:USDT'        # OKX 永續合約標準標的
 TIMEFRAME = '5m'                # 5分鐘極短線
@@ -27,16 +27,21 @@ RSI_LENGTH = 3                  # RSI 週期 3
 RSI_BUY_TARGET = 10.0           # RSI=10 預判開倉目標
 RSI_CANBUY = 30.0               # RSI >= 30 冷卻解禁門檻
 
-# 雙軌分批止盈目標設定
-PROFIT_TARGET_RATIO_1 = 1.003   # 第一段止盈：成本均價 + 0.3% (賣出 50% 倉位)
-PROFIT_TARGET_RATIO_2 = 1.006   # 第二段止盈：成本均價 + 0.6% (賣出剩餘 50% 倉位)
+# 4 檔金字塔分批止盈目標與比例設定 (基於回本價)
+# 防禦優先：+0.2% 即先收割 50% 部位，後面階梯遞減
+PROFIT_TARGETS = [
+    {"ratio": 1.002, "weight": 0.50},  # 第 1 檔：+0.2% (賣出 50% - 瞬間降險)
+    {"ratio": 1.004, "weight": 0.35},  # 第 2 檔：+0.4% (賣出 35%)
+    {"ratio": 1.006, "weight": 0.10},  # 第 3 檔：+0.6% (賣出 10%)
+    {"ratio": 1.010, "weight": 0.05}   # 第 4 檔：+1.0% (賣出 5% - 波段尾巴)
+]
 
 LEVERAGE = 10                   # 10 倍槓桿
 MARGIN_MODE = 'isolated'        # 逐倉模式 (Isolated)
 MAINTENANCE_MARGIN_RATE = 0.005 # 維持保證金率 (約 0.5%)
 
-BASE_MARGIN_USD = 30.0          # 基礎買入保證金 30U (買單A)
-FEE_RATE = 0.0005               # 合約手續費率
+BASE_MARGIN_USD = 60.0          # 基礎保證金調高至 60U (確保多檔切割時安全大於最小張數)
+FEE_RATE = 0.0005               # 合約手續費率 (來回共 0.1%)
 
 STATE_FILE = "bot_state_swap.json"
 LOG_FILE = "market_log_swap.csv"
@@ -125,7 +130,7 @@ def run_strategy():
     
     try:
         current_time = get_taiwan_time()
-        print(f"[{current_time}] 🔄 雙軌分批止盈機器人啟動 (保證金: {BASE_MARGIN_USD}U) | 標的: {SYMBOL}")
+        print(f"[{current_time}] 🔄 保守防禦 4 檔金字塔機器人啟動 (保證金: {BASE_MARGIN_USD}U) | 標的: {SYMBOL}")
         
         # ==========================
         # 設定保證金模式與槓桿
@@ -171,9 +176,9 @@ def run_strategy():
                 actual_entry_price = float(pos['entryPrice'])
                 break
 
-        # 如果交易所實際持倉變為 0 (代表止盈單或平倉完成) -> 完整重置狀態
+        # 如果交易所實際持倉變為 0 (代表止盈完成) -> 完整重置狀態
         if actual_contracts == 0 and state['totalContracts'] > 0:
-            print(f"✨ 偵測到持倉已全部清空（分批止盈完成或平倉），重置機器人狀態。")
+            print(f"✨ 偵測到持倉已全部清空（4檔金字塔防禦止盈完成），重置機器人狀態。")
             state['buyCount'] = 0
             state['totalContracts'] = 0.0
             state['totalMarginUSD'] = 0.0
@@ -184,7 +189,6 @@ def run_strategy():
             state['active_order_ids'] = []
             save_state(state)
         elif actual_contracts > 0:
-            # 更新為交易所目前的真實合約數（支援部分成交後的殘餘部位更新）
             state['totalContracts'] = actual_contracts
             if actual_entry_price > 0:
                 state['avgEntryPrice'] = actual_entry_price
@@ -202,12 +206,10 @@ def run_strategy():
                 try:
                     order_info = exchange.fetch_order(oid, SYMBOL)
                     if order_info.get('status') == 'closed' and order_info.get('side') == 'buy':
-                        # 買單成交處理
                         margin_1 = BASE_MARGIN_USD
                         state['buyCount'] += 1
                         state['totalMarginUSD'] += margin_1
                         
-                        # 重新撈取真實持倉來校正均價與合約數
                         positions_after_buy = exchange.fetch_positions([SYMBOL])
                         for pos in positions_after_buy:
                             if pos['symbol'] == SYMBOL and float(pos['contracts']) > 0:
@@ -234,7 +236,7 @@ def run_strategy():
             save_state(state)
 
         # ==========================
-        # 5. 核心判定與雙軌掛單佈署
+        # 5. 核心判定與保守防禦 4 檔掛單佈署
         # ==========================
         is_safe_from_liq = (state['buyCount'] == 0) or (current_price > state['liquidationPrice'] * 1.02)
         is_allowed_by_cost = (state['buyCount'] == 0) or (state['breakevenPrice'] > current_price)
@@ -244,39 +246,33 @@ def run_strategy():
 
         new_active_ids = []
 
-        # --- A. 雙軌分批止盈掛賣單 (50% 於 +0.5% | 50% 於 +1.0%) ---
+        # --- A. 保守防禦 4 檔分批止盈掛賣單 (+0.2%, +0.4%, +0.6%, +1.0%) ---
         if has_inventory:
-            # 將總合約對半拆分
-            half_contracts = state['totalContracts'] / 2.0
-            formatted_half = float(exchange.amount_to_precision(SYMBOL, half_contracts))
-            formatted_total = float(exchange.amount_to_precision(SYMBOL, state['totalContracts']))
-
-            # 如果合約數量太小無法對半切，則全數掛在第二段目標
-            if formatted_half <= 0:
-                sell_targets = [(formatted_total, state['breakevenPrice'] * PROFIT_TARGET_RATIO_2)]
-            else:
-                sell_targets = [
-                    (formatted_half, state['breakevenPrice'] * PROFIT_TARGET_RATIO_1), # 50% 於 +0.5%
-                    (formatted_total - formatted_half, state['breakevenPrice'] * PROFIT_TARGET_RATIO_2) # 50% 於 +1.0%
-                ]
-
-            # 先清理舊的賣單
             sell_orders_to_cancel = [o['id'] for o in open_orders if o['side'] == 'sell']
             if sell_orders_to_cancel:
                 cancel_orders_safely(sell_orders_to_cancel)
 
             params = {'reduceOnly': True}
-            for idx, (qty, target_price) in enumerate(sell_targets, start=1):
+            total_contracts = state['totalContracts']
+            
+            for idx, target in enumerate(PROFIT_TARGETS, start=1):
+                raw_qty = total_contracts * target["weight"]
+                formatted_qty = float(exchange.amount_to_precision(SYMBOL, raw_qty))
+                target_price = state['breakevenPrice'] * target["ratio"]
                 formatted_sell_price = float(exchange.price_to_precision(SYMBOL, target_price))
+
                 if formatted_sell_price <= state['avgEntryPrice']:
-                    print(f"⚠️ 【安全機制】第 {idx} 段止盈價 ({formatted_sell_price}) 低於成本均價，暫不掛此單")
+                    print(f"⚠️ 【安全機制】第 {idx} 檔止盈價 ({formatted_sell_price}) 低於成本均價，暫不掛此單")
                     continue
                 
-                if qty > 0:
-                    order_sell = exchange.create_limit_sell_order(SYMBOL, qty, formatted_sell_price, params)
-                    new_active_ids.append(order_sell['id'])
-                    print(f"🎯 【分批止盈掛單 #{idx}】目標價: {formatted_sell_price} | 數量: {qty}")
-                    action_taken = "SWAP_PRE_PLACE_LADDER_SELL"
+                if formatted_qty > 0:
+                    try:
+                        order_sell = exchange.create_limit_sell_order(SYMBOL, formatted_qty, formatted_sell_price, params)
+                        new_active_ids.append(order_sell['id'])
+                        print(f"🛡️ 【防禦止盈掛單 #{idx}】目標價: {formatted_sell_price} (+{(target['ratio']-1)*100:.1f}%) | 數量: {formatted_qty} ({int(target['weight']*100)}%)")
+                        action_taken = "SWAP_PRE_PLACE_DEFENSIVE_4_SELLS"
+                    except Exception as e:
+                        print(f"ℹ️ 第 {idx} 檔掛單略過 (部位太少低於交易所最小單位): {e}")
 
         # --- B. 預先掛買單 ---
         if should_buy:
