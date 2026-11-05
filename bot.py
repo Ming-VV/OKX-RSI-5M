@@ -40,7 +40,7 @@ LEVERAGE = 10                   # 10 倍槓桿
 MARGIN_MODE = 'isolated'        # 逐倉模式 (Isolated)
 MAINTENANCE_MARGIN_RATE = 0.005 # 維持保證金率 (約 0.5%)
 
-BASE_MARGIN_USD = 30.0          # 基礎保證金調高至 60U (確保多檔切割時安全大於最小張數)
+BASE_MARGIN_USD = 10.0          # 基礎保證金調高至 60U (確保多檔切割時安全大於最小張數)
 FEE_RATE = 0.0005               # 合約手續費率 (來回共 0.1%)
 
 STATE_FILE = "bot_state_swap.json"
