@@ -13,7 +13,10 @@ exchange = ccxt.okx({
     'secret': os.environ.get('OKX_SECRET_KEY'),
     'password': os.environ.get('OKX_PASSWORD'),
     'enableRateLimit': True,
-    'options': {'defaultType': 'swap'}  # 強制指定為永續合約市場
+    'options': {
+        'defaultType': 'swap',              # 強制指定為永續合約市場
+        'defaultMarginMode': 'isolated',    # 預設逐倉
+    }
 })
 
 exchange.load_markets()
@@ -28,27 +31,51 @@ RSI_BUY_TARGET = 10.0           # RSI=10 預判開倉目標
 RSI_CANBUY = 30.0               # RSI >= 30 冷卻解禁門檻
 
 # 4 檔金字塔分批止盈目標與比例設定 (基於回本價)
-# 防禦優先：+0.2% 即先收割 50% 部位，後面階梯遞減
 PROFIT_TARGETS = [
-    {"ratio": 1.001, "weight": 0.50},  # 第 1 檔：+0.2% (賣出 50% - 瞬間降險)
-    {"ratio": 1.003, "weight": 0.25},  # 第 2 檔：+0.4% (賣出 35%)
-    {"ratio": 1.006, "weight": 0.15},  # 第 3 檔：+0.6% (賣出 10%)
-    {"ratio": 1.01,  "weight": 0.10}   # 第 4 檔：+1.0% (賣出 5% - 波段尾巴)
+    {"ratio": 1.001, "weight": 0.50},  # 第 1 檔：+0.1% (賣出 50% - 瞬間降險)
+    {"ratio": 1.003, "weight": 0.25},  # 第 2 檔：+0.3% (賣出 25%)
+    {"ratio": 1.006, "weight": 0.15},  # 第 3 檔：+0.6% (賣出 15%)
+    {"ratio": 1.01,  "weight": 0.10}   # 第 4 檔：+1.0% (賣出 10% - 波段尾巴)
 ]
 
 LEVERAGE = 10                   # 10 倍槓桿
 MARGIN_MODE = 'isolated'        # 逐倉模式 (Isolated)
 MAINTENANCE_MARGIN_RATE = 0.005 # 維持保證金率 (約 0.5%)
 
-BASE_MARGIN_USD = 10.0          # 基礎保證金調高至 60U (確保多檔切割時安全大於最小張數)
+# 持倉模式：'net' = 買賣模式 (建議)；'long_short' = 開平倉模式 (需帶 posSide)
+POSITION_MODE = 'net'
+
+BASE_MARGIN_USD = 10.0          # 基礎保證金 (USDT)
 FEE_RATE = 0.0005               # 合約手續費率 (來回共 0.1%)
 
 STATE_FILE = "bot_state_swap.json"
 LOG_FILE = "market_log_swap.csv"
 
+
+# ==========================
+# 下單參數 (關鍵修正：每張單都必須指定 tdMode)
+# ==========================
+def buy_params():
+    params = {'tdMode': MARGIN_MODE}
+    if POSITION_MODE == 'long_short':
+        params['posSide'] = 'long'
+    return params
+
+
+def sell_params():
+    params = {'tdMode': MARGIN_MODE}
+    if POSITION_MODE == 'long_short':
+        # 開平倉模式下，平多單用 posSide=long，且不可帶 reduceOnly
+        params['posSide'] = 'long'
+    else:
+        params['reduceOnly'] = True
+    return params
+
+
 def get_taiwan_time():
     """取得準確的台灣本地時間 (UTC+8)"""
     return (pd.Timestamp.now() + pd.Timedelta(hours=8)).strftime('%Y-%m-%d %H:%M:%S')
+
 
 def load_state():
     if os.path.exists(STATE_FILE):
@@ -65,9 +92,11 @@ def load_state():
         "active_order_ids": []      # 追蹤所有掛單 ID
     }
 
+
 def save_state(state):
     with open(STATE_FILE, 'w') as f:
         json.dump(state, f, indent=4)
+
 
 def log_market_data(log_data):
     df_log = pd.DataFrame([log_data])
@@ -76,7 +105,9 @@ def log_market_data(log_data):
     else:
         df_log.to_csv(LOG_FILE, mode='a', header=False, index=False, encoding='utf-8-sig')
 
+
 state = load_state()
+
 
 def calculate_rsi(df, period=3):
     delta = df['close'].diff()
@@ -88,33 +119,35 @@ def calculate_rsi(df, period=3):
     rsi = 100 - (100 / (1 + rs))
     return rsi
 
+
 def calculate_exact_price_for_rsi_with_current(df, current_price, period=3, target_rsi=10.0):
     alpha = 1.0 / period
     temp_df = df.copy()
     delta = temp_df['close'].diff()
     gain = delta.clip(lower=0)
     loss = -delta.clip(upper=0)
-    
+
     avg_gain_series = gain.ewm(alpha=alpha, min_periods=period, adjust=False).mean()
     avg_loss_series = loss.ewm(alpha=alpha, min_periods=period, adjust=False).mean()
-    
+
     prev_avg_gain = avg_gain_series.iloc[-1]
     prev_avg_loss = avg_loss_series.iloc[-1]
-    
+
     target_rs = target_rsi / (100.0 - target_rsi)
-    
+
     target_avg_loss_A = (1.0 - alpha) * prev_avg_loss
     target_avg_gain_A = target_rs * target_avg_loss_A
     price_case_up = current_price + (target_avg_gain_A - (1.0 - alpha) * prev_avg_gain) / alpha
-    
+
     target_avg_gain_B = (1.0 - alpha) * prev_avg_gain
     target_avg_loss_B = target_avg_gain_B / target_rs
     price_case_down = current_price - (target_avg_loss_B - (1.0 - alpha) * prev_avg_loss) / alpha
-    
+
     if target_rsi > 50:
         return price_case_up if price_case_up > current_price else price_case_down
     else:
         return price_case_down if price_case_down < current_price else price_case_up
+
 
 def cancel_orders_safely(order_ids):
     for oid in order_ids:
@@ -125,41 +158,48 @@ def cancel_orders_safely(order_ids):
         except Exception as e:
             print(f"⚠️ 撤銷訂單失敗 ({oid}) (可能已成交或不存在): {e}")
 
+
+def find_long_position():
+    """取得目前多單持倉 (張數, 均價)；逐倉/全倉皆可讀取"""
+    positions = exchange.fetch_positions([SYMBOL])
+    for pos in positions:
+        contracts = float(pos.get('contracts') or 0)
+        side = pos.get('side')
+        if pos['symbol'] == SYMBOL and contracts > 0 and side in (None, 'long'):
+            return contracts, float(pos.get('entryPrice') or 0), pos.get('marginMode')
+    return 0.0, 0.0, None
+
+
 def run_strategy():
     global state
-    
+
     try:
         current_time = get_taiwan_time()
         print(f"[{current_time}] 🔄 保守防禦 4 檔金字塔機器人啟動 (保證金: {BASE_MARGIN_USD}U) | 標的: {SYMBOL}")
-        
-        # ==========================
-        # 設定保證金模式與槓桿
-        # ==========================
-        try:
-            exchange.set_margin_mode(MARGIN_MODE, SYMBOL)
-        except Exception as e:
-            print(f"ℹ️ 保證金模式設定提示: {e}")
 
+        # ==========================
+        # 設定槓桿 (OKX 的保證金模式是由每張訂單的 tdMode 決定)
+        # ==========================
+        lever_params = {'marginMode': MARGIN_MODE}
+        if POSITION_MODE == 'long_short':
+            lever_params['posSide'] = 'long'
         try:
-            exchange.set_leverage(int(LEVERAGE), SYMBOL, {'marginMode': MARGIN_MODE})
+            exchange.set_leverage(int(LEVERAGE), SYMBOL, lever_params)
         except Exception as e:
-            try:
-                exchange.set_leverage(int(LEVERAGE), SYMBOL)
-            except Exception as e2:
-                print(f"❌ 槓桿設定最終失敗: {e2}")
-                raise e2
+            print(f"❌ 槓桿設定失敗: {e}")
+            raise e
 
-        print(f"✅ 成功套用: 逐倉 (Isolated) / {LEVERAGE}x 槓桿")
-        
+        print(f"✅ 成功套用: 逐倉 (Isolated) / {LEVERAGE}x 槓桿 / 持倉模式: {POSITION_MODE}")
+
         ohlcv = exchange.fetch_ohlcv(SYMBOL, TIMEFRAME, limit=50)
         df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-        
+
         ticker = exchange.fetch_ticker(SYMBOL)
         current_price = ticker['last']
-        
+
         df['rsi'] = calculate_rsi(df, RSI_LENGTH)
         current_rsi = df['rsi'].iloc[-1]
-        
+
         print(f"現價: {current_price} | 當前動態 RSI(3): {current_rsi:.2f} | 持倉合約: {state['totalContracts']} | 解禁狀態: {state['rsi_reset']}")
 
         action_taken = "HOLD"
@@ -167,18 +207,15 @@ def run_strategy():
         # ==========================
         # 3. 交易所真實持倉與訂單成交檢查
         # ==========================
-        positions = exchange.fetch_positions([SYMBOL])
-        actual_contracts = 0.0
-        actual_entry_price = 0.0
-        for pos in positions:
-            if pos['symbol'] == SYMBOL and float(pos['contracts']) > 0:
-                actual_contracts = float(pos['contracts'])
-                actual_entry_price = float(pos['entryPrice'])
-                break
+        actual_contracts, actual_entry_price, actual_margin_mode = find_long_position()
+
+        if actual_contracts > 0 and actual_margin_mode and actual_margin_mode != MARGIN_MODE:
+            print(f"⚠️ 【警告】目前持倉為 {actual_margin_mode} 模式，非 {MARGIN_MODE}！"
+                  f"請先手動平倉並撤銷所有掛單，之後新開的倉位才會是逐倉。")
 
         # 如果交易所實際持倉變為 0 (代表止盈完成) -> 完整重置狀態
         if actual_contracts == 0 and state['totalContracts'] > 0:
-            print(f"✨ 偵測到持倉已全部清空（4檔金字塔防禦止盈完成），重置機器人狀態。")
+            print("✨ 偵測到持倉已全部清空（4檔金字塔防禦止盈完成），重置機器人狀態。")
             state['buyCount'] = 0
             state['totalContracts'] = 0.0
             state['totalMarginUSD'] = 0.0
@@ -197,10 +234,10 @@ def run_strategy():
 
         open_orders = exchange.fetch_open_orders(SYMBOL)
         open_order_ids = [order['id'] for order in open_orders]
-        
+
         tracked_active_ids = state.get('active_order_ids', [])
         missing_orders = [oid for oid in tracked_active_ids if oid not in open_order_ids]
-        
+
         if missing_orders:
             for oid in missing_orders:
                 try:
@@ -209,21 +246,19 @@ def run_strategy():
                         margin_1 = BASE_MARGIN_USD
                         state['buyCount'] += 1
                         state['totalMarginUSD'] += margin_1
-                        
-                        positions_after_buy = exchange.fetch_positions([SYMBOL])
-                        for pos in positions_after_buy:
-                            if pos['symbol'] == SYMBOL and float(pos['contracts']) > 0:
-                                state['totalContracts'] = float(pos['contracts'])
-                                state['avgEntryPrice'] = float(pos['entryPrice'])
-                                break
-                        
+
+                        contracts_now, entry_now, _ = find_long_position()
+                        if contracts_now > 0:
+                            state['totalContracts'] = contracts_now
+                            state['avgEntryPrice'] = entry_now
+
                         state['breakevenPrice'] = state['avgEntryPrice'] / (1.0 - (FEE_RATE * 2))
                         state['liquidationPrice'] = state['avgEntryPrice'] * (1.0 - (1.0 / LEVERAGE) + MAINTENANCE_MARGIN_RATE)
                         state['rsi_reset'] = False
                         print(f"🛒 買單成交！總次數: {state['buyCount']} | 總合約: {state['totalContracts']} | 均價: {state['avgEntryPrice']:.2f}")
                 except Exception as e:
                     print(f"⚠️ 查詢訂單 {oid} 失敗: {e}")
-            
+
             state['active_order_ids'] = [o['id'] for o in open_orders]
             save_state(state)
 
@@ -246,15 +281,14 @@ def run_strategy():
 
         new_active_ids = []
 
-        # --- A. 保守防禦 4 檔分批止盈掛賣單 (+0.2%, +0.4%, +0.6%, +1.0%) ---
+        # --- A. 保守防禦 4 檔分批止盈掛賣單 ---
         if has_inventory:
             sell_orders_to_cancel = [o['id'] for o in open_orders if o['side'] == 'sell']
             if sell_orders_to_cancel:
                 cancel_orders_safely(sell_orders_to_cancel)
 
-            params = {'reduceOnly': True}
             total_contracts = state['totalContracts']
-            
+
             for idx, target in enumerate(PROFIT_TARGETS, start=1):
                 raw_qty = total_contracts * target["weight"]
                 formatted_qty = float(exchange.amount_to_precision(SYMBOL, raw_qty))
@@ -264,15 +298,17 @@ def run_strategy():
                 if formatted_sell_price <= state['avgEntryPrice']:
                     print(f"⚠️ 【安全機制】第 {idx} 檔止盈價 ({formatted_sell_price}) 低於成本均價，暫不掛此單")
                     continue
-                
+
                 if formatted_qty > 0:
                     try:
-                        order_sell = exchange.create_limit_sell_order(SYMBOL, formatted_qty, formatted_sell_price, params)
+                        order_sell = exchange.create_limit_sell_order(
+                            SYMBOL, formatted_qty, formatted_sell_price, sell_params()
+                        )
                         new_active_ids.append(order_sell['id'])
                         print(f"🛡️ 【防禦止盈掛單 #{idx}】目標價: {formatted_sell_price} (+{(target['ratio']-1)*100:.1f}%) | 數量: {formatted_qty} ({int(target['weight']*100)}%)")
                         action_taken = "SWAP_PRE_PLACE_DEFENSIVE_4_SELLS"
                     except Exception as e:
-                        print(f"ℹ️ 第 {idx} 檔掛單略過 (部位太少低於交易所最小單位): {e}")
+                        print(f"ℹ️ 第 {idx} 檔掛單略過 (部位太少低於交易所最小單位或參數錯誤): {e}")
 
         # --- B. 預先掛買單 ---
         if should_buy:
@@ -285,18 +321,18 @@ def run_strategy():
             margin_1 = BASE_MARGIN_USD
             notional_1 = margin_1 * LEVERAGE
             contracts_1 = notional_1 / rsi10_price
-            
+
             f_contracts_1 = float(exchange.amount_to_precision(SYMBOL, contracts_1))
             f_price_1 = float(exchange.price_to_precision(SYMBOL, rsi10_price))
-            
-            order1 = exchange.create_limit_buy_order(SYMBOL, f_contracts_1, f_price_1)
+
+            order1 = exchange.create_limit_buy_order(SYMBOL, f_contracts_1, f_price_1, buy_params())
             new_active_ids.append(order1['id'])
-            print(f"🎯 【預先掛買單A (RSI=10)】掛單價: {f_price_1} | 保證金: {margin_1}U")
+            print(f"🎯 【預先掛買單A (RSI=10)】掛單價: {f_price_1} | 保證金: {margin_1}U | 模式: {MARGIN_MODE}")
 
             # 【預先買單 2】0.97 折數巨幅加碼單
             estimated_total_margin_including_a = state['totalMarginUSD'] + margin_1
             margin_2 = estimated_total_margin_including_a * 2.0
-            
+
             if state['buyCount'] == 0:
                 estimated_avg_price = f_price_1
             else:
@@ -307,14 +343,14 @@ def run_strategy():
             target_price_2 = estimated_avg_price * 0.97
             notional_2 = margin_2 * LEVERAGE
             contracts_2 = notional_2 / target_price_2
-            
+
             f_contracts_2 = float(exchange.amount_to_precision(SYMBOL, contracts_2))
             f_price_2 = float(exchange.price_to_precision(SYMBOL, target_price_2))
-            
-            order2 = exchange.create_limit_buy_order(SYMBOL, f_contracts_2, f_price_2)
+
+            order2 = exchange.create_limit_buy_order(SYMBOL, f_contracts_2, f_price_2, buy_params())
             new_active_ids.append(order2['id'])
-            print(f"⚡ 【預先掛買單B (0.97折)】掛單價: {f_price_2:.2f} | 保證金: {margin_2:.2f}U")
-            
+            print(f"⚡ 【預先掛買單B (0.97折)】掛單價: {f_price_2:.2f} | 保證金: {margin_2:.2f}U | 模式: {MARGIN_MODE}")
+
             action_taken = "SWAP_PRE_PLACE_DOUBLE_BUYS"
 
         state['active_order_ids'] = list(set(new_active_ids))
@@ -344,6 +380,7 @@ def run_strategy():
 
     except Exception as e:
         print(f"❌ 發生錯誤: {e}")
+
 
 if __name__ == "__main__":
     run_strategy()
