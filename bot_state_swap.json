@@ -1,16 +1,15 @@
 {
-    "buyCount": 30,
-    "totalContracts": 20.77,
-    "totalMarginUSD": 403.02735599999994,
-    "avgEntryPrice": 2265.0515406836785,
-    "breakevenPrice": 2267.3188595432216,
-    "liquidationPrice": 1806.4406927381578,
-    "rsi_reset": true,
+    "buyCount": 31,
+    "totalContracts": 20.81,
+    "totalMarginUSD": 403.92481999999995,
+    "avgEntryPrice": 2265.0104228736186,
+    "breakevenPrice": 2267.2777005741927,
+    "liquidationPrice": 1807.3014561733842,
+    "rsi_reset": false,
     "active_order_ids": [
-        "4078002346790539264",
-        "4078002362494013440",
-        "4078002354608721920",
-        "4078002350582190081",
-        "4078002342764007424"
+        "4078012779903635456",
+        "4078012768897781760",
+        "4078012785272344576",
+        "4078012774434263040"
     ]
 }
