@@ -2,8 +2,8 @@ name: Run Trading Bot
 
 on:
   # 允許外部 cron-job.org 透過 API 觸發
-  repository_dispatch:
-    types: [run-bot-event]
+  #repository_dispatch:
+    #types: [run-bot-event]
 
   # 保持允許手動觸發
   workflow_dispatch:
